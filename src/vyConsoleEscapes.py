@@ -1,15 +1,6 @@
 
+import re
 # https://en.wikipedia.org/wiki/ANSI_escape_code
-# ==============================================================================
-# 8 BIT CODES: 256 codes
-# ==============================================================================
-# ESC[38;5;⟨n⟩ m Select foreground color
-# ESC[48;5;⟨n⟩ m Select background color
-#   0-  7:  standard colors (as in ESC [ 30–37 m)
-#   8- 15:  high intensity colors (as in ESC [ 90–97 m)
-#  16-231:  6 × 6 × 6 cube (216 colors): 16 + 36 × r + 6 × g + b (0 ≤ r, g, b ≤ 5)
-# 232-255:  grayscale from black to white in 24 steps
-
 # https://docs.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences#screen-colors
 # https://www.lihaoyi.com/post/BuildyourownCommandLinewithANSIescapecodes.html#16-colors
 
@@ -17,40 +8,95 @@ strEscape = '\033'
 unicodeEscape = u'\u001b'
 # on windows cmd.exe press 'CTRL+[' for 'Escape'. Normal keybord escape input will clear the command
 
+VyConsoleEscapeColorDiffs = {
+    'black': 0,
+    'red': 1,
+    'green': 2,
+    'yellow': 3,
+    'blue': 4,
+    'magenta': 5,
+    'cyan': 6,
+    'white': 7,
+}
+
+class vyColorDict():
+    def __init__(self, normalColorsOffset, strongColorsOffset, extendedColorsOffset):
+        self._dict = {}
+        self.extendedColorsOffset = extendedColorsOffset
+        for color, diff in VyConsoleEscapeColorDiffs.items():
+            # foreground normal colors e.g. esc.fg.red0 = esc.fg.red_normal
+            # background normal colors e.g. esc.bg.red0 = esc.bg.red_normal
+            self[color+'-normal'] = self[color+'0'] = f'\033[{normalColorsOffset+diff}m'
+            # foreground strong colors e.g. esc.fg.red = esc.fg.red1 = esc.fg.red_strong
+            # background strong colors e.g. esc.bg.red = esc.bg.red1 = esc.bg.red_strong
+            self[color+'-strong'] = self[color+'1'] = self[color] = f'\033[{strongColorsOffset+diff}m'
+        
+        self['grey'] = self['gray'] = self['black-strong']
+        # ==============================================================================
+        # Extended Codes: 8 bits, 256 codes
+        # ==============================================================================
+        # ESC[38;5;⟨n⟩m : Foreground colors
+        # ESC[48;5;⟨n⟩m : Background colors
+        #   0-  7: Normal colors
+        #          key: e.g. 'white-normal-256'
+        #   8- 15: Strong colors
+        #          key: e.g. 'white-strong-256'
+        #  16-231: 216 RGB colors : 16+ 36R + 6G + B : 0 ≤ R, G, B ≤ 5
+        #          key: e.g. 0, 500, 231
+        # 232-255: Grayscale in 24 steps, from black to white
+        #          key: e.g. grey-0, grey-11, grey-23
+
+        for i, variant in enumerate(['normal', 'strong']):
+            for color, diff in VyConsoleEscapeColorDiffs.items():
+                code = i * 8 + diff
+                key = f'{color}-{variant}-256'
+                self[key] = f'\033[{extendedColorsOffset};5;{code}m'
+
+        for r in range(0, 6):
+            for g in range(0, 6):
+                for b in range(0, 6):
+                    key = r * 100 + g * 10 + b
+                    code = 16 + 36 * r + 6 * g + b
+                    self[key] = f'\033[{extendedColorsOffset};5;{code}m'
+
+        for shade in range(24):
+            self['grey-'+str(shade)] = self['gray-'+str(shade)] = f'\033[{extendedColorsOffset};5;{232+shade}m'
+        # ==============================================================================
+        # Extended Codes: 24 bit RGB colors
+        # ==============================================================================
+        # this we will handle through getitem, storing it is very memory intensive
+        # key: e.g. 'ffffff', 'ff0011', '000000'
+
+    def __setitem__(self, key, value):
+        self._dict[key] = value
+
+    def __getitem__(self, key):
+        if key in self._dict:
+            return self._dict[key]
+        if type(key) is str:
+            mo = re.match('[0-9a-fA-F]{6}', key)
+            if mo:
+                r, g, b = tuple(int(key[i:i+2], 16) for i in (0, 2, 4))
+                return f'\033[{self.extendedColorsOffset};2;{r};{g};{b}m'
+        raise KeyError
+
 class VyConsoleEscapes:
-    colorDiffs = {
-        'black': 0,
-        'red': 1,
-        'green': 2,
-        'yellow': 3,
-        'blue': 4,
-        'magenta': 5,
-        'cyan': 6,
-        'white': 7,
-    }
-    reset = 0           # Returns all attributes to the default state prior to modification
-    bold = 1            # Applies brightness/intensity flag to foreground color
-    underline = 4       # Adds underline
-    inverse = 7         # Swaps foreground and background colors
-    noUnderline = 24    # Removes underline
-    positive = 27       # No negative/inverse, returns foreground/background to normal
-    foreground8bit = 38     # Foreground Extended, applies extended color value to the foreground
-    background8bit = 48     # Background Extended, applies extended color value to the background
-    foregroundDefault = 39  # Foreground Default	Applies only the foreground portion of the defaults (see 0)
-    backgroundDefault = 49  # Background Default	Applies only the background portion of the defaults (see 0)
+    reset       = '\033[0m'     # Returns all attributes to the default state prior to modification
+    bold        = '\033[1m'     # Applies brightness/intensity flag to foreground color
+    underline   = '\033[4m'     # Adds underline
+    inverse     = '\033[7m'     # Swaps foreground and background colors
+    noUnderline = '\033[24m'    # Removes underline
+    positive    = '\033[27m'    # No negative/inverse, returns foreground/background to normal
+    resetFg     = '\033[39m'    # Foreground Default, applies only the foreground portion of the defaults
+    resetBg     = '\033[49m'    # Background Default, applies only the background portion of the defaults
+    fg = vyColorDict(30, 90, 38)
+    bg = vyColorDict(40, 100, 48)
 
-    foreground = {}
-    background = {}
+esc = VyConsoleEscapes
 
-vce = VyConsoleEscapes
-reset = '\033[0m'
-
-for color, diff in VyConsoleEscapes.colorDiffs.items():
-    vce.foreground['normal-' + color] = 30 + diff
-    vce.background['normal-' + color] = 40 + diff
-    vce.foreground['strong-' + color] = 90 + diff
-    vce.background['strong-' + color] = 100 + diff
-
+# ==============================================================================
+# Quick utility string format function
+# ==============================================================================
 NO_FLAGS = 0
 UNDERLINE = 1
 BOLD = 2
@@ -58,27 +104,21 @@ INVERSE = 4
 NO_UNDERLINE = 2 ^ 30
 NO_INVERSE = 2 ^ 31
 
-def format(text, fgColor=None, fgVariant='strong', bgColor=None, bgVariant='strong', flags=NO_FLAGS):
+def format(text, fgColor=None, bgColor=None, flags=NO_FLAGS):
     escapedStr = ''
     if fgColor:
-        fgCode = vce.foreground[f'{fgVariant}-{fgColor}']
-        escapedStr += f'\033[{fgCode}m'
+        escapedStr += esc.fg[fgColor]
     if bgColor:
-        bgCode = vce.background[f'{bgVariant}-{bgColor}']
-        escapedStr += f'\033[{bgCode}m'
+        escapedStr += esc.bg[bgColor]
     if flags & UNDERLINE:
-        escapedStr += f'\033[{vce.underline}m'
+        escapedStr += esc.underline
     if flags & BOLD:
-        escapedStr += f'\033[{vce.bold}m'
+        escapedStr += esc.bold
     if flags & INVERSE:
-        escapedStr += f'\033[{vce.inverse}m'
+        escapedStr += esc.inverse
     if flags & NO_INVERSE:
-        escapedStr += f'\033[{vce.positive}m'
+        escapedStr += esc.positive
     if flags & NO_UNDERLINE:
-        escapedStr += f'\033[{vce.noUnderline}m'
-    escapedStr += text + reset
+        escapedStr += esc.noUnderline
+    escapedStr += text + esc.reset
     return escapedStr
-
-def fgColor256(text, color):
-    pass
-
